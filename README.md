@@ -311,8 +311,18 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 must follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 
-## Local restricted transaction approval
+## Optional restricted writes (Node HTTP server)
 
-This local build provides `approve_transaction` alongside the restricted clearing and category tools. Keep `YNAB_WRITE_POLICY=clear-status`; explicitly set `YNAB_APPROVAL_WRITE_BUDGET` to the same budget as `YNAB_CLEARED_WRITE_BUDGET` to enable approval. Read-only OAuth grants remain read-only. Other budgets and general write tools remain blocked.
+With no `YNAB_WRITE_POLICY` configured, existing toolset and read-only behavior is unchanged. The three restricted tools are hidden until explicitly enabled. For a restricted deployment, configure:
+
+```dotenv
+YNAB_WRITE_POLICY=clear-status
+YNAB_CLEARED_WRITE_BUDGET=your-budget-id
+# Optional category and approval actions, in that same budget:
+YNAB_CATEGORY_WRITE_BUDGET=your-budget-id
+YNAB_APPROVAL_WRITE_BUDGET=your-budget-id
+```
+
+The policy name retains compatibility with the original cleared-status setting. Category and approval tools have separate opt-ins. With this policy enabled, general write tools are hidden and blocked by the dispatcher; only the enabled restricted tools can write, and only in the configured budget. Read-only OAuth grants and `YNAB_READ_ONLY=true` still block every write. Unknown policy names and inconsistent budget settings fail at startup rather than silently changing permissions.
 
 The tool accepts `transaction_id`, optional `budget_id`, and the reviewed `expected_category_id` (null for uncategorized). It reads the current entry and sends only `approved: true`. It cannot unapprove, change clearing status or category, or change financial fields. Deleted/reconciled entries, transfers, splits, changed categories, and extra arguments are rejected. Already approved entries do not issue another write. Approval means accepting the transaction for review purposes; it does not establish bank posting or finalize reconciliation.

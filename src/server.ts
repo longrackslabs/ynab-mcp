@@ -27,6 +27,7 @@ import { YnabOAuthProvider } from "./oauth-server.js";
 import { Store } from "./store.js";
 import { parseReadOnly, parseToolsets } from "./toolsets.js";
 import { makeToolContextFromProps } from "./worker-config.js";
+import { parseWritePolicy } from "./write-policy.js";
 
 const ConsentForm = z.object({ pending: z.string(), scope: z.string().optional() });
 const CallbackQuery = z.object({ state: z.string().optional(), code: z.string().optional() });
@@ -63,25 +64,8 @@ async function main(): Promise<void> {
   // OAuth flow). Off by default; the OAuth path is unaffected either way.
   const allowPat = /^(true|1)$/i.test((process.env["YNAB_PAT_PASSTHROUGH"] ?? "").trim());
   const patReadOnly = parseReadOnly(process.env["YNAB_READ_ONLY"]);
-  const clearStatusOnly = process.env["YNAB_WRITE_POLICY"] === "clear-status";
-  if (!patReadOnly && !clearStatusOnly) {
-    throw new Error(
-      "This local deployment requires read-only mode or the clear-status write policy.",
-    );
-  }
-  const clearedWriteBudget = process.env["YNAB_CLEARED_WRITE_BUDGET"]?.trim();
-  if (clearStatusOnly && !clearedWriteBudget)
-    throw new Error("YNAB_CLEARED_WRITE_BUDGET is required");
-
-  const categoryWriteBudget = process.env["YNAB_CATEGORY_WRITE_BUDGET"]?.trim();
-  if (categoryWriteBudget && (!clearStatusOnly || categoryWriteBudget !== clearedWriteBudget))
-    throw new Error("Category writes require the restricted policy and the same approved budget.");
-
-  const approvalWriteBudget = process.env["YNAB_APPROVAL_WRITE_BUDGET"]?.trim();
-  if (approvalWriteBudget && (!clearStatusOnly || approvalWriteBudget !== clearedWriteBudget))
-    throw new Error(
-      "Transaction approval requires the restricted policy and the same approved budget.",
-    );
+  const { clearStatusOnly, clearedWriteBudget, categoryWriteBudget, approvalWriteBudget } =
+    parseWritePolicy(process.env);
 
   const store = new Store(databasePath);
   const provider = new YnabOAuthProvider({
