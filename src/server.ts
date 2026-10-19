@@ -64,8 +64,13 @@ async function main(): Promise<void> {
   // OAuth flow). Off by default; the OAuth path is unaffected either way.
   const allowPat = /^(true|1)$/i.test((process.env["YNAB_PAT_PASSTHROUGH"] ?? "").trim());
   const patReadOnly = parseReadOnly(process.env["YNAB_READ_ONLY"]);
-  const { clearStatusOnly, clearedWriteBudget, categoryWriteBudget, approvalWriteBudget } =
-    parseWritePolicy(process.env);
+  const {
+    clearStatusOnly,
+    clearedWriteBudget,
+    categoryWriteBudget,
+    approvalWriteBudget,
+    reconciliationWriteBudget,
+  } = parseWritePolicy(process.env);
 
   const store = new Store(databasePath);
   const provider = new YnabOAuthProvider({
@@ -194,6 +199,7 @@ async function main(): Promise<void> {
         clearedWriteBudget,
         categoryWriteBudget,
         approvalWriteBudget,
+        reconciliationWriteBudget,
       },
       req,
       res,
@@ -217,6 +223,7 @@ interface McpDeps {
   clearedWriteBudget: string | undefined;
   categoryWriteBudget: string | undefined;
   approvalWriteBudget: string | undefined;
+  reconciliationWriteBudget: string | undefined;
 }
 
 // Resolve the ToolContext for this request: a YNAB PAT passed straight through,
@@ -236,6 +243,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
             clearedWriteBudget: deps.clearedWriteBudget,
             categoryWriteBudget: deps.categoryWriteBudget,
             approvalWriteBudget: deps.approvalWriteBudget,
+            reconciliationWriteBudget: deps.reconciliationWriteBudget,
           }
         : {}),
     };
@@ -265,6 +273,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
     ctx.clearedWriteBudget = deps.clearedWriteBudget;
     ctx.categoryWriteBudget = deps.categoryWriteBudget;
     ctx.approvalWriteBudget = deps.approvalWriteBudget;
+    ctx.reconciliationWriteBudget = deps.reconciliationWriteBudget;
   }
   if (refreshed) {
     deps.store.updateGrantTokens(

@@ -8,7 +8,11 @@ export function parseWritePolicy(env: Record<string, string | undefined>) {
   const clearedWriteBudget = env["YNAB_CLEARED_WRITE_BUDGET"]?.trim() || undefined;
   const categoryWriteBudget = env["YNAB_CATEGORY_WRITE_BUDGET"]?.trim() || undefined;
   const approvalWriteBudget = env["YNAB_APPROVAL_WRITE_BUDGET"]?.trim() || undefined;
-  if (!clearStatusOnly && (clearedWriteBudget || categoryWriteBudget || approvalWriteBudget)) {
+  const reconciliationWriteBudget = env["YNAB_RECONCILIATION_WRITE_BUDGET"]?.trim() || undefined;
+  if (
+    !clearStatusOnly &&
+    (clearedWriteBudget || categoryWriteBudget || approvalWriteBudget || reconciliationWriteBudget)
+  ) {
     throw new Error("Restricted write budget settings require YNAB_WRITE_POLICY=clear-status.");
   }
   if (clearStatusOnly && !clearedWriteBudget) {
@@ -20,5 +24,13 @@ export function parseWritePolicy(env: Record<string, string | undefined>) {
   if (approvalWriteBudget && approvalWriteBudget !== clearedWriteBudget) {
     throw new Error("Transaction approval requires the same approved budget.");
   }
-  return { clearStatusOnly, clearedWriteBudget, categoryWriteBudget, approvalWriteBudget };
+  if (reconciliationWriteBudget && reconciliationWriteBudget !== clearedWriteBudget)
+    throw new Error("Reconciliation requires the same approved budget.");
+  return {
+    clearStatusOnly,
+    clearedWriteBudget,
+    categoryWriteBudget,
+    approvalWriteBudget,
+    reconciliationWriteBudget,
+  };
 }

@@ -44,9 +44,13 @@ describe("tool and toolset counts", () => {
     expect(
       TOOLS.filter(
         (tool) =>
-          !["set_transaction_cleared", "set_transaction_category", "approve_transaction"].includes(
-            tool.name,
-          ),
+          ![
+            "set_transaction_cleared",
+            "set_transaction_category",
+            "approve_transaction",
+            "preview_account_reconciliation",
+            "reconcile_account",
+          ].includes(tool.name),
       ).length,
     ).toBe(46);
     expect(landingPage.includes("46 tools")).toBe(true);

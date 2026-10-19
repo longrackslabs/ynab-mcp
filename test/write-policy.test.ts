@@ -27,6 +27,7 @@ function context(env: Record<string, string | undefined>) {
           clearedWriteBudget: policy.clearedWriteBudget,
           categoryWriteBudget: policy.categoryWriteBudget,
           approvalWriteBudget: policy.approvalWriteBudget,
+          reconciliationWriteBudget: policy.reconciliationWriteBudget,
         }
       : {}),
   };
@@ -49,8 +50,17 @@ describe("optional restricted write policy", () => {
     "preserves every original upstream tool when no policy is selected: %j",
     (env) => {
       const { ctx } = context(env);
-      expect([...enabledToolNames(ctx)].sort()).toEqual(
-        TOOLS.filter((t) => !restrictedNames.includes(t.name))
+      expect(
+        [...enabledToolNames(ctx)]
+          .filter((name) => name !== "preview_account_reconciliation")
+          .sort(),
+      ).toEqual(
+        TOOLS.filter(
+          (t) =>
+            ![...restrictedNames, "reconcile_account", "preview_account_reconciliation"].includes(
+              t.name,
+            ),
+        )
           .map((t) => t.name)
           .sort(),
       );
@@ -66,6 +76,26 @@ describe("optional restricted write policy", () => {
     expect(
       writes(context({ ...restricted, YNAB_APPROVAL_WRITE_BUDGET: "example-budget" }).ctx),
     ).toEqual(["approve_transaction", "set_transaction_cleared"]);
+  });
+  it("requires a separate matching-budget reconciliation opt-in", () => {
+    expect(
+      writes(context({ ...restricted, YNAB_RECONCILIATION_WRITE_BUDGET: "example-budget" }).ctx),
+    ).toEqual(["reconcile_account", "set_transaction_cleared"]);
+    expect(
+      writes(
+        context({
+          ...restricted,
+          YNAB_RECONCILIATION_WRITE_BUDGET: "example-budget",
+          YNAB_READ_ONLY: "true",
+        }).ctx,
+      ),
+    ).toEqual([]);
+    expect(() =>
+      parseWritePolicy({ YNAB_RECONCILIATION_WRITE_BUDGET: "example-budget" }),
+    ).toThrow();
+    expect(() =>
+      parseWritePolicy({ ...restricted, YNAB_RECONCILIATION_WRITE_BUDGET: "other" }),
+    ).toThrow();
   });
   it("blocks general write calls before API access in restricted mode", async () => {
     const { ctx, calls } = context({
@@ -113,6 +143,7 @@ describe("optional restricted write policy", () => {
       clearedWriteBudget: "example-budget",
       categoryWriteBudget: undefined,
       approvalWriteBudget: undefined,
+      reconciliationWriteBudget: undefined,
     });
   });
 });

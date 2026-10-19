@@ -29,6 +29,7 @@ import {
   formatScheduledTransaction,
   formatTransaction,
 } from "./format.js";
+import { readReconciliationPlan, applyReconciliation } from "./reconciliation.js";
 import { summarizeSpending } from "./summary.js";
 import { isToolEnabled } from "./toolsets.js";
 
@@ -41,6 +42,7 @@ export interface ToolContext {
   clearedWriteBudget?: string;
   categoryWriteBudget?: string;
   approvalWriteBudget?: string;
+  reconciliationWriteBudget?: string;
 }
 
 // The YNAB API operation(s) a tool actually calls, for the generated reference's
@@ -89,6 +91,20 @@ const CategoryRef = BudgetArg.extend({ category_id: z.string() });
 const TransactionRef = BudgetArg.extend({ transaction_id: z.string() });
 const MonthRef = BudgetArg.extend({ month: z.string().default("current") });
 const PayeeRef = BudgetArg.extend({ payee_id: z.string() });
+
+const AccountReconciliationInput = z
+  .object({
+    budget_id: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .optional(),
+    account_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    bank_balance_milliunits: z.number().int().safe(),
+  })
+  .strict();
+const ApplyAccountReconciliationInput = AccountReconciliationInput.extend({
+  plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
 
 const ApproveTransactionInput = z
   .object({
@@ -448,6 +464,82 @@ export const TOOLS: ToolDef[] = [
         },
       },
       required: ["transaction_id", "expected_category_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "preview_account_reconciliation",
+    group: "transactions",
+    write: false,
+    description:
+      "Read-only account reconciliation preview. Requires the signed bank posted balance in integer milliunits (card debt negative). Reads full history, validates totals, lists cleared entries to mark reconciled, and reports blockers. Does not verify bank posting or change data.",
+    endpoints: [
+      ep("GET", "/budgets/{budget_id}/accounts/{account_id}", "Accounts", "getAccountById"),
+      ep(
+        "GET",
+        "/budgets/{budget_id}/accounts/{account_id}/transactions",
+        "Transactions",
+        "getTransactionsByAccount",
+      ),
+    ],
+    inputSchema: {
+      type: "object",
+      properties: {
+        budget_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        account_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        bank_balance_milliunits: {
+          type: "integer",
+          description:
+            "Signed posted bank balance in milliunits; 1000 is one unit. Credit-card debt must be negative. Exclude pending activity.",
+        },
+      },
+      required: ["account_id", "bank_balance_milliunits"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "reconcile_account",
+    group: "transactions",
+    write: true,
+    description:
+      "Apply an explicitly approved account reconciliation preview using its plan_id. Only already-cleared, approved transactions become reconciled; uncleared entries are never cleared. Requires a matching bank balance, unchanged preview, and an opted-in budget. Maximum 25 entries. Reports partial failures and independently verifies results. The API has no account-level reconciliation endpoint; account reconciliation-date behavior is reported separately.",
+    endpoints: [
+      ep("GET", "/budgets/{budget_id}/accounts/{account_id}", "Accounts", "getAccountById"),
+      ep(
+        "GET",
+        "/budgets/{budget_id}/accounts/{account_id}/transactions",
+        "Transactions",
+        "getTransactionsByAccount",
+      ),
+      ep(
+        "GET",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "getTransactionById",
+      ),
+      ep(
+        "PUT",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "updateTransaction",
+      ),
+    ],
+    inputSchema: {
+      type: "object",
+      properties: {
+        budget_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        account_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        bank_balance_milliunits: {
+          type: "integer",
+          description: "Same signed posted bank balance in milliunits as the approved preview.",
+        },
+        plan_id: {
+          type: "string",
+          pattern: "^[a-f0-9]{64}$",
+          description: "plan_id from the reviewed read-only preview.",
+        },
+      },
+      required: ["account_id", "bank_balance_milliunits", "plan_id"],
       additionalProperties: false,
     },
   },
@@ -1363,6 +1455,8 @@ export function isToolEnabledForContext(ctx: ToolContext, tool: ToolDef): boolea
     return ctx.writePolicy === "clear-status" && !!ctx.categoryWriteBudget;
   if (tool.name === "approve_transaction")
     return ctx.writePolicy === "clear-status" && !!ctx.approvalWriteBudget;
+  if (tool.name === "reconcile_account")
+    return ctx.writePolicy === "clear-status" && !!ctx.reconciliationWriteBudget;
   return !(ctx.writePolicy === "clear-status" && tool.write);
 }
 
@@ -1497,6 +1591,17 @@ export async function handleTool(
           await client.updateTransaction(targetBudget, args.transaction_id, { approved: true }),
         ),
       );
+    }
+    case "preview_account_reconciliation": {
+      const args = AccountReconciliationInput.parse(rawArgs);
+      return json((await readReconciliationPlan(client, budget(args), args)).preview);
+    }
+    case "reconcile_account": {
+      const args = ApplyAccountReconciliationInput.parse(rawArgs);
+      const targetBudget = ctx.reconciliationWriteBudget;
+      if (!targetBudget || (args.budget_id && args.budget_id !== targetBudget))
+        throw new Error("Reconciliation is not enabled for this budget.");
+      return json(await applyReconciliation(client, targetBudget, args, args.plan_id));
     }
     case "list_budgets": {
       const args = ListBudgetsInput.parse(rawArgs);
