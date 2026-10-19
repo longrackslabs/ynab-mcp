@@ -40,6 +40,7 @@ export interface ToolContext {
   writePolicy?: "clear-status";
   clearedWriteBudget?: string;
   categoryWriteBudget?: string;
+  approvalWriteBudget?: string;
 }
 
 // The YNAB API operation(s) a tool actually calls, for the generated reference's
@@ -88,6 +89,17 @@ const CategoryRef = BudgetArg.extend({ category_id: z.string() });
 const TransactionRef = BudgetArg.extend({ transaction_id: z.string() });
 const MonthRef = BudgetArg.extend({ month: z.string().default("current") });
 const PayeeRef = BudgetArg.extend({ payee_id: z.string() });
+
+const ApproveTransactionInput = z
+  .object({
+    budget_id: z.string().optional(),
+    transaction_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    expected_category_id: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .nullable(),
+  })
+  .strict();
 
 const SetTransactionCategoryInput = z
   .object({
@@ -400,6 +412,42 @@ export const TOOLS: ToolDef[] = [
         },
       },
       required: ["transaction_id", "category_id", "expected_category_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "approve_transaction",
+    group: "transactions",
+    write: true,
+    description:
+      "Accept an existing ordinary transaction by setting only approved to true in the approved budget. Requires the reviewed current category (null if uncategorized). Cannot unapprove, clear, recategorize, change financial fields, or delete. Rejects deleted/reconciled entries, transfers, and splits.",
+    endpoints: [
+      ep(
+        "GET",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "getTransactionById",
+      ),
+      ep(
+        "PUT",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "updateTransaction",
+      ),
+    ],
+    inputSchema: {
+      type: "object",
+      properties: {
+        budget_id: { type: "string" },
+        transaction_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        expected_category_id: {
+          type: ["string", "null"],
+          pattern: "^[a-zA-Z0-9_-]+$",
+          description:
+            "Current category id from review; null for uncategorized. Stops if the category changed.",
+        },
+      },
+      required: ["transaction_id", "expected_category_id"],
       additionalProperties: false,
     },
   },
@@ -1313,6 +1361,8 @@ export function isToolEnabledForContext(ctx: ToolContext, tool: ToolDef): boolea
   if (tool.name === "set_transaction_cleared") return ctx.writePolicy === "clear-status";
   if (tool.name === "set_transaction_category")
     return ctx.writePolicy === "clear-status" && !!ctx.categoryWriteBudget;
+  if (tool.name === "approve_transaction")
+    return ctx.writePolicy === "clear-status" && !!ctx.approvalWriteBudget;
   return !(ctx.writePolicy === "clear-status" && tool.write);
 }
 
@@ -1410,6 +1460,41 @@ export async function handleTool(
           await client.updateTransaction(targetBudget, args.transaction_id, {
             category_id: args.category_id,
           }),
+        ),
+      );
+    }
+    case "approve_transaction": {
+      const args = ApproveTransactionInput.parse(rawArgs);
+      const targetBudget = ctx.approvalWriteBudget;
+      if (!targetBudget || (args.budget_id && args.budget_id !== targetBudget)) {
+        throw new Error("Transaction approval is not enabled for this budget.");
+      }
+      const current = await client.getTransaction(targetBudget, args.transaction_id);
+      if (
+        current.id !== args.transaction_id ||
+        current.deleted ||
+        current.cleared === "reconciled"
+      ) {
+        throw new Error(
+          "Deleted, reconciled, or mismatched transactions cannot be approved by this tool.",
+        );
+      }
+      if (
+        current.transfer_account_id ||
+        current.transfer_transaction_id ||
+        current.subtransactions.length
+      ) {
+        throw new Error("Transfers and split transactions cannot be approved by this tool.");
+      }
+      if (current.category_id !== args.expected_category_id) {
+        throw new Error(
+          "Transaction category changed since review. Fetch it again before approving.",
+        );
+      }
+      if (current.approved) return json(formatTransaction(current));
+      return json(
+        formatTransaction(
+          await client.updateTransaction(targetBudget, args.transaction_id, { approved: true }),
         ),
       );
     }

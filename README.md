@@ -309,3 +309,10 @@ version.
 
 Releases are automated via [release-please](https://github.com/googleapis/release-please). Commits
 must follow [Conventional Commits](https://www.conventionalcommits.org/).
+
+
+## Local restricted transaction approval
+
+This local build provides `approve_transaction` alongside the restricted clearing and category tools. Keep `YNAB_WRITE_POLICY=clear-status`; explicitly set `YNAB_APPROVAL_WRITE_BUDGET` to the same budget as `YNAB_CLEARED_WRITE_BUDGET` to enable approval. Read-only OAuth grants remain read-only. Other budgets and general write tools remain blocked.
+
+The tool accepts `transaction_id`, optional `budget_id`, and the reviewed `expected_category_id` (null for uncategorized). It reads the current entry and sends only `approved: true`. It cannot unapprove, change clearing status or category, or change financial fields. Deleted/reconciled entries, transfers, splits, changed categories, and extra arguments are rejected. Already approved entries do not issue another write. Approval means accepting the transaction for review purposes; it does not establish bank posting or finalize reconciliation.

@@ -43,7 +43,10 @@ describe("tool and toolset counts", () => {
     // still describes the original upstream tool inventory.
     expect(
       TOOLS.filter(
-        (tool) => !["set_transaction_cleared", "set_transaction_category"].includes(tool.name),
+        (tool) =>
+          !["set_transaction_cleared", "set_transaction_category", "approve_transaction"].includes(
+            tool.name,
+          ),
       ).length,
     ).toBe(46);
     expect(landingPage.includes("46 tools")).toBe(true);

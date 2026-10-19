@@ -77,6 +77,12 @@ async function main(): Promise<void> {
   if (categoryWriteBudget && (!clearStatusOnly || categoryWriteBudget !== clearedWriteBudget))
     throw new Error("Category writes require the restricted policy and the same approved budget.");
 
+  const approvalWriteBudget = process.env["YNAB_APPROVAL_WRITE_BUDGET"]?.trim();
+  if (approvalWriteBudget && (!clearStatusOnly || approvalWriteBudget !== clearedWriteBudget))
+    throw new Error(
+      "Transaction approval requires the restricted policy and the same approved budget.",
+    );
+
   const store = new Store(databasePath);
   const provider = new YnabOAuthProvider({
     store,
@@ -203,6 +209,7 @@ async function main(): Promise<void> {
         clearStatusOnly,
         clearedWriteBudget,
         categoryWriteBudget,
+        approvalWriteBudget,
       },
       req,
       res,
@@ -225,6 +232,7 @@ interface McpDeps {
   clearStatusOnly: boolean;
   clearedWriteBudget: string | undefined;
   categoryWriteBudget: string | undefined;
+  approvalWriteBudget: string | undefined;
 }
 
 // Resolve the ToolContext for this request: a YNAB PAT passed straight through,
@@ -243,6 +251,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
             writePolicy: "clear-status" as const,
             clearedWriteBudget: deps.clearedWriteBudget,
             categoryWriteBudget: deps.categoryWriteBudget,
+            approvalWriteBudget: deps.approvalWriteBudget,
           }
         : {}),
     };
@@ -271,6 +280,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
     ctx.writePolicy = "clear-status";
     ctx.clearedWriteBudget = deps.clearedWriteBudget;
     ctx.categoryWriteBudget = deps.categoryWriteBudget;
+    ctx.approvalWriteBudget = deps.approvalWriteBudget;
   }
   if (refreshed) {
     deps.store.updateGrantTokens(
