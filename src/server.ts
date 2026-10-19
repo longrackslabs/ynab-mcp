@@ -63,6 +63,19 @@ async function main(): Promise<void> {
   // OAuth flow). Off by default; the OAuth path is unaffected either way.
   const allowPat = /^(true|1)$/i.test((process.env["YNAB_PAT_PASSTHROUGH"] ?? "").trim());
   const patReadOnly = parseReadOnly(process.env["YNAB_READ_ONLY"]);
+  const clearStatusOnly = process.env["YNAB_WRITE_POLICY"] === "clear-status";
+  if (!patReadOnly && !clearStatusOnly) {
+    throw new Error(
+      "This local deployment requires read-only mode or the clear-status write policy.",
+    );
+  }
+  const clearedWriteBudget = process.env["YNAB_CLEARED_WRITE_BUDGET"]?.trim();
+  if (clearStatusOnly && !clearedWriteBudget)
+    throw new Error("YNAB_CLEARED_WRITE_BUDGET is required");
+
+  const categoryWriteBudget = process.env["YNAB_CATEGORY_WRITE_BUDGET"]?.trim();
+  if (categoryWriteBudget && (!clearStatusOnly || categoryWriteBudget !== clearedWriteBudget))
+    throw new Error("Category writes require the restricted policy and the same approved budget.");
 
   const store = new Store(databasePath);
   const provider = new YnabOAuthProvider({
@@ -110,7 +123,7 @@ async function main(): Promise<void> {
       issuerUrl,
       resourceServerUrl,
       resourceName: "YNAB MCP",
-      scopesSupported: ["ynab.read", "ynab.write"],
+      scopesSupported: patReadOnly ? ["ynab.read"] : ["ynab.read", "ynab.write"],
     }),
   );
 
@@ -126,7 +139,10 @@ async function main(): Promise<void> {
       return;
     }
     provider
-      .beginUpstreamLogin(form.data.pending, form.data.scope ?? "read-only")
+      .beginUpstreamLogin(
+        form.data.pending,
+        patReadOnly ? "read-only" : (form.data.scope ?? "read-only"),
+      )
       .then((location) => res.redirect(302, location))
       .catch((err: unknown) => res.status(500).send(errorText(err)));
   });
@@ -177,7 +193,20 @@ async function main(): Promise<void> {
 
   // The authenticated MCP endpoint (stateless Streamable HTTP, one transport per request).
   app.all("/mcp", mcpAuth, express.json(), (req, res) => {
-    handleMcp({ provider, store, encKey, config, patReadOnly }, req, res).catch((err: unknown) => {
+    handleMcp(
+      {
+        provider,
+        store,
+        encKey,
+        config,
+        patReadOnly,
+        clearStatusOnly,
+        clearedWriteBudget,
+        categoryWriteBudget,
+      },
+      req,
+      res,
+    ).catch((err: unknown) => {
       if (!res.headersSent) res.status(500).json({ error: errorText(err) });
     });
   });
@@ -193,6 +222,9 @@ interface McpDeps {
   encKey: CryptoKey;
   config: OAuthConfig;
   patReadOnly: boolean;
+  clearStatusOnly: boolean;
+  clearedWriteBudget: string | undefined;
+  categoryWriteBudget: string | undefined;
 }
 
 // Resolve the ToolContext for this request: a YNAB PAT passed straight through,
@@ -206,6 +238,13 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
       enabledGroups: parseToolsets("all"),
       readOnly: deps.patReadOnly,
       defaultBudget: "last-used",
+      ...(deps.clearStatusOnly
+        ? {
+            writePolicy: "clear-status" as const,
+            clearedWriteBudget: deps.clearedWriteBudget,
+            categoryWriteBudget: deps.categoryWriteBudget,
+          }
+        : {}),
     };
     return { ctx, note: "pat" };
   }
@@ -227,6 +266,12 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
     readOnly: grant.readOnly,
   };
   const { ctx, refreshed } = await makeToolContextFromProps(props, deps.config, fetch, Date.now());
+  ctx.readOnly = ctx.readOnly || deps.patReadOnly;
+  if (deps.clearStatusOnly) {
+    ctx.writePolicy = "clear-status";
+    ctx.clearedWriteBudget = deps.clearedWriteBudget;
+    ctx.categoryWriteBudget = deps.categoryWriteBudget;
+  }
   if (refreshed) {
     deps.store.updateGrantTokens(
       grantId,

@@ -39,7 +39,13 @@ const llmsTxt = readFileSync(join(siteRoot, "public", "llms.txt"), "utf8");
 
 describe("tool and toolset counts", () => {
   it("the site's claimed tool count (46) matches TOOLS", () => {
-    expect(TOOLS.length).toBe(46);
+    // The private deployment adds restricted tools; the upstream site's count
+    // still describes the original upstream tool inventory.
+    expect(
+      TOOLS.filter(
+        (tool) => !["set_transaction_cleared", "set_transaction_category"].includes(tool.name),
+      ).length,
+    ).toBe(46);
     expect(landingPage.includes("46 tools")).toBe(true);
     expect(llmsTxt.includes("46 tools")).toBe(true);
   });

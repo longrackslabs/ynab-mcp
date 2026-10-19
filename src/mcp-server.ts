@@ -8,16 +8,17 @@ import { z } from "zod";
 
 import type { ToolContext } from "./tools.js";
 
-import { handleTool, TOOLS } from "./tools.js";
-import { isToolEnabled } from "./toolsets.js";
+import { handleTool, isToolEnabledForContext, TOOLS } from "./tools.js";
 
 export function buildMcpServer(ctx: ToolContext): Server {
   const server = new Server({ name: "ynab", version: "0.1.0" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.filter((t) =>
-      isToolEnabled(ctx.enabledGroups, ctx.readOnly, t.group, t.write),
-    ).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+    tools: TOOLS.filter((t) => isToolEnabledForContext(ctx, t)).map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

@@ -37,6 +37,9 @@ export interface ToolContext {
   enabledGroups: Set<ToolGroup>;
   readOnly: boolean;
   defaultBudget: string;
+  writePolicy?: "clear-status";
+  clearedWriteBudget?: string;
+  categoryWriteBudget?: string;
 }
 
 // The YNAB API operation(s) a tool actually calls, for the generated reference's
@@ -58,7 +61,12 @@ export interface ToolDef {
   group: ToolGroup;
   write: boolean;
   description: string;
-  inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
+  inputSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+    additionalProperties?: boolean;
+  };
   endpoints: Endpoint[];
 }
 
@@ -81,8 +89,27 @@ const TransactionRef = BudgetArg.extend({ transaction_id: z.string() });
 const MonthRef = BudgetArg.extend({ month: z.string().default("current") });
 const PayeeRef = BudgetArg.extend({ payee_id: z.string() });
 
+const SetTransactionCategoryInput = z
+  .object({
+    budget_id: z.string().optional(),
+    transaction_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    category_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    expected_category_id: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .nullable(),
+  })
+  .strict();
+
 const flagColor = z.enum(["red", "orange", "yellow", "green", "blue", "purple"]);
 const cleared = z.enum(["cleared", "uncleared", "reconciled"]);
+const SetTransactionClearedInput = z
+  .object({
+    budget_id: z.string().optional(),
+    transaction_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    cleared: z.enum(["cleared", "uncleared"]),
+  })
+  .strict();
 
 const ListTransactionsInput = BudgetArg.extend({
   account_id: z.string().optional(),
@@ -307,6 +334,75 @@ const subtransactionProps = {
 } as const;
 
 export const TOOLS: ToolDef[] = [
+  {
+    name: "set_transaction_cleared",
+    group: "transactions",
+    write: true,
+    description:
+      "Set only the cleared or uncleared status of an existing transaction in the approved budget. Cannot change reconciled transactions, amounts, dates, categories, payees, or delete anything.",
+    endpoints: [
+      ep(
+        "GET",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "getTransactionById",
+      ),
+      ep(
+        "PUT",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "updateTransaction",
+      ),
+    ],
+    inputSchema: {
+      type: "object",
+      properties: {
+        budget_id: { type: "string" },
+        transaction_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        cleared: { type: "string", enum: ["cleared", "uncleared"] },
+      },
+      required: ["transaction_id", "cleared"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_transaction_category",
+    group: "transactions",
+    write: true,
+    description:
+      "Set only the category of an existing ordinary transaction in the approved budget. Requires the expected current category (null for uncategorized). Rejects transfers, splits, deleted or reconciled entries, and inactive/internal categories. Cannot change amounts, dates, payees, cleared status, or delete anything.",
+    endpoints: [
+      ep(
+        "GET",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "getTransactionById",
+      ),
+      ep("GET", "/budgets/{budget_id}/categories/{category_id}", "Categories", "getCategoryById"),
+      ep(
+        "PUT",
+        "/budgets/{budget_id}/transactions/{transaction_id}",
+        "Transactions",
+        "updateTransaction",
+      ),
+    ],
+    inputSchema: {
+      type: "object",
+      properties: {
+        budget_id: { type: "string" },
+        transaction_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        category_id: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+        expected_category_id: {
+          type: ["string", "null"],
+          pattern: "^[a-zA-Z0-9_-]+$",
+          description:
+            "Current category id from a fresh read; null for an uncategorized transaction.",
+        },
+      },
+      required: ["transaction_id", "category_id", "expected_category_id"],
+      additionalProperties: false,
+    },
+  },
   {
     name: "list_budgets",
     group: "budgets",
@@ -1209,11 +1305,15 @@ export const TOOLS: ToolDef[] = [
 // ---------------------------------------------------------------------------
 
 export function enabledToolNames(ctx: ToolContext): Set<string> {
-  return new Set(
-    TOOLS.filter((t) => isToolEnabled(ctx.enabledGroups, ctx.readOnly, t.group, t.write)).map(
-      (t) => t.name,
-    ),
-  );
+  return new Set(TOOLS.filter((t) => isToolEnabledForContext(ctx, t)).map((t) => t.name));
+}
+
+export function isToolEnabledForContext(ctx: ToolContext, tool: ToolDef): boolean {
+  if (!isToolEnabled(ctx.enabledGroups, ctx.readOnly, tool.group, tool.write)) return false;
+  if (tool.name === "set_transaction_cleared") return ctx.writePolicy === "clear-status";
+  if (tool.name === "set_transaction_category")
+    return ctx.writePolicy === "clear-status" && !!ctx.categoryWriteBudget;
+  return !(ctx.writePolicy === "clear-status" && tool.write);
 }
 
 function json(value: unknown): string {
@@ -1245,6 +1345,74 @@ export async function handleTool(
     (args.budget_id ?? "").trim() || ctx.defaultBudget;
 
   switch (name) {
+    case "set_transaction_cleared": {
+      const args = SetTransactionClearedInput.parse(rawArgs);
+      if (!ctx.clearedWriteBudget)
+        throw new Error("No budget approved for cleared-status changes.");
+      if (args.budget_id && args.budget_id !== ctx.clearedWriteBudget) {
+        throw new Error("Cleared-status changes are not enabled for this budget.");
+      }
+      const targetBudget = ctx.clearedWriteBudget;
+      const current = await client.getTransaction(targetBudget, args.transaction_id);
+      if (current.deleted || current.cleared === "reconciled") {
+        throw new Error("Deleted or reconciled transactions cannot be changed by this tool.");
+      }
+      if (current.cleared === args.cleared) return json(formatTransaction(current));
+      return json(
+        formatTransaction(
+          await client.updateTransaction(targetBudget, args.transaction_id, {
+            cleared: args.cleared,
+          }),
+        ),
+      );
+    }
+    case "set_transaction_category": {
+      const args = SetTransactionCategoryInput.parse(rawArgs);
+      const targetBudget = ctx.categoryWriteBudget;
+      if (!targetBudget || (args.budget_id && args.budget_id !== targetBudget)) {
+        throw new Error("Category changes are not enabled for this budget.");
+      }
+      const current = await client.getTransaction(targetBudget, args.transaction_id);
+      if (
+        current.id !== args.transaction_id ||
+        current.deleted ||
+        current.cleared === "reconciled"
+      ) {
+        throw new Error(
+          "Deleted, reconciled, or mismatched transactions cannot be changed by this tool.",
+        );
+      }
+      if (
+        current.transfer_account_id ||
+        current.transfer_transaction_id ||
+        current.subtransactions.length
+      ) {
+        throw new Error("Transfers and split transactions cannot be changed by this tool.");
+      }
+      if (current.category_id !== args.expected_category_id) {
+        throw new Error(
+          "Transaction category changed since review. Fetch it again before retrying.",
+        );
+      }
+      const category = await client.getCategory(targetBudget, args.category_id);
+      if (
+        category.id !== args.category_id ||
+        category.deleted ||
+        category.hidden ||
+        category.internal === true ||
+        category.category_group_name === "Internal Master Category"
+      ) {
+        throw new Error("Target category must be an active ordinary category.");
+      }
+      if (current.category_id === args.category_id) return json(formatTransaction(current));
+      return json(
+        formatTransaction(
+          await client.updateTransaction(targetBudget, args.transaction_id, {
+            category_id: args.category_id,
+          }),
+        ),
+      );
+    }
     case "list_budgets": {
       const args = ListBudgetsInput.parse(rawArgs);
       const budgets = await client.listBudgets({
