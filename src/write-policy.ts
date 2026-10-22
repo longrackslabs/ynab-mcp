@@ -7,11 +7,16 @@ export function parseWritePolicy(env: Record<string, string | undefined>) {
   const clearStatusOnly = policy === "clear-status";
   const clearedWriteBudget = env["YNAB_CLEARED_WRITE_BUDGET"]?.trim() || undefined;
   const categoryWriteBudget = env["YNAB_CATEGORY_WRITE_BUDGET"]?.trim() || undefined;
+  const categoryCreateBudget = env["YNAB_CATEGORY_CREATE_BUDGET"]?.trim() || undefined;
   const approvalWriteBudget = env["YNAB_APPROVAL_WRITE_BUDGET"]?.trim() || undefined;
   const reconciliationWriteBudget = env["YNAB_RECONCILIATION_WRITE_BUDGET"]?.trim() || undefined;
   if (
     !clearStatusOnly &&
-    (clearedWriteBudget || categoryWriteBudget || approvalWriteBudget || reconciliationWriteBudget)
+    (clearedWriteBudget ||
+      categoryWriteBudget ||
+      categoryCreateBudget ||
+      approvalWriteBudget ||
+      reconciliationWriteBudget)
   ) {
     throw new Error("Restricted write budget settings require YNAB_WRITE_POLICY=clear-status.");
   }
@@ -20,6 +25,9 @@ export function parseWritePolicy(env: Record<string, string | undefined>) {
   }
   if (categoryWriteBudget && categoryWriteBudget !== clearedWriteBudget) {
     throw new Error("Category writes require the same approved budget.");
+  }
+  if (categoryCreateBudget && categoryCreateBudget !== clearedWriteBudget) {
+    throw new Error("Category creation requires the same approved budget.");
   }
   if (approvalWriteBudget && approvalWriteBudget !== clearedWriteBudget) {
     throw new Error("Transaction approval requires the same approved budget.");
@@ -30,6 +38,7 @@ export function parseWritePolicy(env: Record<string, string | undefined>) {
     clearStatusOnly,
     clearedWriteBudget,
     categoryWriteBudget,
+    categoryCreateBudget,
     approvalWriteBudget,
     reconciliationWriteBudget,
   };

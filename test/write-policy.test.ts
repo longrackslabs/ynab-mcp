@@ -26,6 +26,7 @@ function context(env: Record<string, string | undefined>) {
           writePolicy: "clear-status",
           clearedWriteBudget: policy.clearedWriteBudget,
           categoryWriteBudget: policy.categoryWriteBudget,
+          categoryCreateBudget: policy.categoryCreateBudget,
           approvalWriteBudget: policy.approvalWriteBudget,
           reconciliationWriteBudget: policy.reconciliationWriteBudget,
         }
@@ -142,6 +143,7 @@ describe("optional restricted write policy", () => {
       clearStatusOnly: true,
       clearedWriteBudget: "example-budget",
       categoryWriteBudget: undefined,
+      categoryCreateBudget: undefined,
       approvalWriteBudget: undefined,
       reconciliationWriteBudget: undefined,
     });
