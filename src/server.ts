@@ -68,6 +68,7 @@ async function main(): Promise<void> {
     clearStatusOnly,
     clearedWriteBudget,
     categoryWriteBudget,
+    categoryCreateBudget,
     approvalWriteBudget,
     reconciliationWriteBudget,
   } = parseWritePolicy(process.env);
@@ -198,6 +199,7 @@ async function main(): Promise<void> {
         clearStatusOnly,
         clearedWriteBudget,
         categoryWriteBudget,
+        categoryCreateBudget,
         approvalWriteBudget,
         reconciliationWriteBudget,
       },
@@ -222,6 +224,7 @@ interface McpDeps {
   clearStatusOnly: boolean;
   clearedWriteBudget: string | undefined;
   categoryWriteBudget: string | undefined;
+  categoryCreateBudget: string | undefined;
   approvalWriteBudget: string | undefined;
   reconciliationWriteBudget: string | undefined;
 }
@@ -242,6 +245,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
             writePolicy: "clear-status" as const,
             clearedWriteBudget: deps.clearedWriteBudget,
             categoryWriteBudget: deps.categoryWriteBudget,
+            categoryCreateBudget: deps.categoryCreateBudget,
             approvalWriteBudget: deps.approvalWriteBudget,
             reconciliationWriteBudget: deps.reconciliationWriteBudget,
           }
@@ -272,6 +276,7 @@ async function resolveContext(deps: McpDeps, req: express.Request, res: express.
     ctx.writePolicy = "clear-status";
     ctx.clearedWriteBudget = deps.clearedWriteBudget;
     ctx.categoryWriteBudget = deps.categoryWriteBudget;
+    ctx.categoryCreateBudget = deps.categoryCreateBudget;
     ctx.approvalWriteBudget = deps.approvalWriteBudget;
     ctx.reconciliationWriteBudget = deps.reconciliationWriteBudget;
   }

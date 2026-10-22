@@ -41,6 +41,7 @@ export interface ToolContext {
   writePolicy?: "clear-status";
   clearedWriteBudget?: string;
   categoryWriteBudget?: string;
+  categoryCreateBudget?: string;
   approvalWriteBudget?: string;
   reconciliationWriteBudget?: string;
 }
@@ -264,6 +265,11 @@ const BulkCreateItem = z.object({
   ...SaveTxnShape,
 });
 const BulkCreateInput = BudgetArg.extend({ transactions: z.array(BulkCreateItem).min(1) });
+
+const RestrictedCreateCategoryInput = BudgetArg.extend({
+  name: z.string().trim().min(1),
+  category_group_id: z.string().min(1),
+}).strict();
 
 const CreateCategoryInput = BudgetArg.extend({
   name: z.string(),
@@ -1236,7 +1242,7 @@ export const TOOLS: ToolDef[] = [
     write: true,
     endpoints: [ep("POST", "/budgets/{budget_id}/categories", "Categories", "createCategory")],
     description:
-      "Create a category in a category group (newer YNAB endpoint; verify availability on your plan).",
+      "Create a category in an existing group. Restricted deployments allow only name, category_group_id, and optional budget_id, with a separate category-creation opt-in. No goals or other edits in restricted mode.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1453,6 +1459,8 @@ export function isToolEnabledForContext(ctx: ToolContext, tool: ToolDef): boolea
   if (tool.name === "set_transaction_cleared") return ctx.writePolicy === "clear-status";
   if (tool.name === "set_transaction_category")
     return ctx.writePolicy === "clear-status" && !!ctx.categoryWriteBudget;
+  if (tool.name === "create_category" && ctx.writePolicy === "clear-status")
+    return !!ctx.categoryCreateBudget;
   if (tool.name === "approve_transaction")
     return ctx.writePolicy === "clear-status" && !!ctx.approvalWriteBudget;
   if (tool.name === "reconcile_account")
@@ -1973,6 +1981,45 @@ export async function handleTool(
       );
     }
     case "create_category": {
+      if (ctx.writePolicy === "clear-status") {
+        const args = RestrictedCreateCategoryInput.parse(rawArgs);
+        const targetBudget = ctx.categoryCreateBudget;
+        if (!targetBudget || (args.budget_id && args.budget_id !== targetBudget)) {
+          throw new Error("Category creation is not enabled for this budget.");
+        }
+        const { category_groups: groups } = await client.listCategories(targetBudget);
+        const matches = groups.filter((g) => g.id === args.category_group_id);
+        const group = matches[0];
+        if (
+          matches.length !== 1 ||
+          !group ||
+          group.hidden ||
+          group.deleted ||
+          group.internal !== false
+        ) {
+          throw new Error("Choose an active, visible, non-internal category group.");
+        }
+        if (group.categories.some((c) => c.name.trim().toLowerCase() === args.name.toLowerCase())) {
+          throw new Error(
+            "A category with this name already exists in the group. Review it before creating another.",
+          );
+        }
+        const category = await client.createCategory(targetBudget, {
+          name: args.name,
+          category_group_id: args.category_group_id,
+        });
+        if (
+          category.name !== args.name ||
+          category.category_group_id !== group.id ||
+          category.deleted ||
+          category.hidden
+        ) {
+          throw new Error(
+            "Creation returned unexpected state. Re-read categories before retrying.",
+          );
+        }
+        return json(formatCategory(category));
+      }
       const args = CreateCategoryInput.parse(rawArgs);
       const category = await client.createCategory(budget(args), {
         name: args.name,
