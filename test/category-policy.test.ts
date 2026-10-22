@@ -104,7 +104,6 @@ describe("restricted category writes", () => {
   });
   it.each([
     { deleted: true },
-    { cleared: "reconciled" },
     { id: "other" },
     { transfer_account_id: "a2" },
     { transfer_transaction_id: "other" },
@@ -128,18 +127,30 @@ describe("restricted category writes", () => {
     );
     expect(calls.map((c) => c.method)).toEqual(["GET", "GET"]);
   });
-  it("sends only category_id to the API and preserves financial fields", async () => {
+  it("changes category while explicitly preserving approval and financial fields", async () => {
     const { ctx, calls } = setup();
     const out = JSON.parse(await handleTool(ctx, "set_transaction_category", args));
     expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "PUT"]);
     expect(calls.every((c) => c.path.startsWith("/v1/budgets/b1/"))).toBe(true);
-    expect(calls[2]?.body).toEqual({ transaction: { category_id: "c1" } });
+    expect(calls[2]?.body).toEqual({ transaction: { category_id: "c1", approved: false } });
     expect(out.category_id).toBe("c1");
     expect(out.amount).toBe(-10000);
     expect(out.cleared).toBe("cleared");
     expect(out.account_id).toBe("a1");
     expect(out.date).toBe("2026-10-19");
   });
+  it.each([true, false])(
+    "recategorizes reconciled entries without changing approval=%s or reconciliation",
+    async (approved) => {
+      const { ctx, calls } = setup({ cleared: "reconciled", approved, memo: "Preserve this" });
+      const out = JSON.parse(await handleTool(ctx, "set_transaction_category", args));
+      expect(calls[2]?.body).toEqual({ transaction: { category_id: "c1", approved } });
+      expect(out.cleared).toBe("reconciled");
+      expect(out.approved).toBe(approved);
+      expect(out.amount).toBe(-10000);
+      expect(out.memo).toBe("Preserve this");
+    },
+  );
   it("makes no write if category already matches", async () => {
     const { ctx, calls } = setup({ category_id: "c1" });
     await handleTool(ctx, "set_transaction_category", { ...args, expected_category_id: "c1" });

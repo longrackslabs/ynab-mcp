@@ -404,7 +404,7 @@ export const TOOLS: ToolDef[] = [
     group: "transactions",
     write: true,
     description:
-      "Set only the category of an existing ordinary transaction in the approved budget. Requires the expected current category (null for uncategorized). Rejects transfers, splits, deleted or reconciled entries, and inactive/internal categories. Cannot change amounts, dates, payees, cleared status, or delete anything.",
+      "Set only the category of an existing ordinary transaction in the approved budget. Requires the expected current category (null for uncategorized). Allows reconciled entries while preserving their status. Rejects transfers, splits, deleted entries, and inactive/internal categories. Cannot change amounts, dates, payees, cleared status, or delete anything.",
     endpoints: [
       ep(
         "GET",
@@ -1525,14 +1525,8 @@ export async function handleTool(
         throw new Error("Category changes are not enabled for this budget.");
       }
       const current = await client.getTransaction(targetBudget, args.transaction_id);
-      if (
-        current.id !== args.transaction_id ||
-        current.deleted ||
-        current.cleared === "reconciled"
-      ) {
-        throw new Error(
-          "Deleted, reconciled, or mismatched transactions cannot be changed by this tool.",
-        );
+      if (current.id !== args.transaction_id || current.deleted) {
+        throw new Error("Deleted or mismatched transactions cannot be changed by this tool.");
       }
       if (
         current.transfer_account_id ||
@@ -1561,6 +1555,8 @@ export async function handleTool(
         formatTransaction(
           await client.updateTransaction(targetBudget, args.transaction_id, {
             category_id: args.category_id,
+            // YNAB may default omitted approval to false on updates.
+            approved: current.approved,
           }),
         ),
       );

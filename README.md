@@ -326,6 +326,8 @@ YNAB_APPROVAL_WRITE_BUDGET=your-budget-id
 YNAB_RECONCILIATION_WRITE_BUDGET=your-budget-id
 ```
 
+Transaction category changes permit reconciled entries: category classification is independent of bank reconciliation. The tool explicitly preserves the current approval flag and leaves clearing status unchanged. Transfers, splits, deleted entries, stale categories, and financial edits remain blocked.
+
 Category creation is separately enabled by `YNAB_CATEGORY_CREATE_BUDGET`. In restricted mode, `create_category` accepts only a name, an existing group ID, and optional budget ID. It refuses inactive/internal groups, duplicate names within the group, and target settings or extra fields. It does not enable editing categories, creating groups, deleting, or allocating budget funds. Creation is not idempotent under concurrent requests: after an error or timeout, re-read categories before considering another call.
 
 The policy name retains compatibility with the original cleared-status setting. Category, approval, and reconciliation tools have separate opt-ins. With this policy enabled, general write tools are hidden and blocked by the dispatcher; only the enabled restricted tools can write, and only in the configured budget. Read-only OAuth grants and `YNAB_READ_ONLY=true` still block every write. Unknown policy names and inconsistent budget settings fail at startup rather than silently changing permissions.
